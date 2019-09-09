@@ -93,7 +93,7 @@ problems:
     Tuple [a,b,c] = Tuple3 a b c
     {- ... -}
   ```
-* With `-XUnifiedNamespace` the renamer will look up the identifier in all of the namespaces.
+* With `-XUnifiedNamespace` the renamer will look up the identifier in all of the namespaces. If an identifier is found in more than one namespace, then an ambigous namespaces error is reported.
 * Without the extension, whenever the renamer looks up an identifier, it will look only in namespaces that the identifier belongs to.
 
 ## Examples
