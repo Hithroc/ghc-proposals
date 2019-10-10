@@ -82,6 +82,8 @@ While this behavior seems very convenient, it introduces a lot of problems:
   ```
   But that argument is implicit and not required. If the user forgets to specify it, GHC will try to infer it which will lead to bad error messages like "could not deduce" that does not really hint to what the problem is and how to fix it.
 
+  There's ["Visible 'forall' in types of terms" proposal](https://github.com/ghc-proposals/ghc-proposals/pull/281) that describes this in more detail and depends on this proposal.
+
 These problems could be solved by changing the identifier lookup rules in a non-intrusive way: whenever we lookup an identifier at the term level we can first search for it in the data namespace, and if it wasn't found there, we could search in other namespaces as a fall-back. To keep compatibility with modules that use punning, a new syntax could be introduced allowing to import only terms or only types from a module.
 
 ## Proposed Change Specification
@@ -118,13 +120,30 @@ These problems could be solved by changing the identifier lookup rules in a non-
     Tuple [a,b,c] = Tuple3 a b c
     {- ... -}
   ```
-* The `[a]` syntax means `[] a` when the `[]` type constructor is in scope, and a singleton list otherwise.
+* When looking in the type-level namespace, `[a]` syntax means `[] a` when the `[]` type constructor is in scope, and a singleton list otherwise.
 * The `(a,b)` syntax means `(,) a b`, where `(,)` is either the type constructor or the data constructor according to the name lookup rules in the given context. This also applies to tuples of other arities.
-* `[]` and `()`, `(,)`, `(,,)`, ..., type constructors are no longer visible by default and instead are exported in a new module `Data.BuiltInTypes` which is imported by default like `Prelude`. `-XNoImplicitBuiltInTypes` is introduced to change this behavior.
-* Deprecate the `'` syntax of `-XDataKinds`, reserving this syntax for Template Haskell name quotation.
-* Deprecate the `''` syntax in Template Haskell.
-* Introduce a new warning, `-Wpun-declaration`, which warns the user when a declaration introduces a type constructor, type variable or a data constructor that clashes with an identifier in another namespace.
-* Introduce a new warning, `-Wpuns`, which warns the user of using an identifier that is found in both namespaces.
+* `[]` and `()`, `(,)`, `(,,)`, ..., type constructors are no longer always visible and instead are exported in a new module `Data.BuiltInTypes` which is imported by default like `Prelude`. `-XNoImplicitBuiltInTypes` is introduced to change this behavior.
+* Deprecate the `'` syntax of `-XDataKinds`, reserving this syntax for Template Haskell name quotation. Introduce a new warning, `-Wprime-data-kinds` which warns of the usage of the syntax.
+* Deprecate the `''` syntax in Template Haskell. Introduce a new warning, `-Wdouble-prime-template-haskell` which warns of the usage of the syntax.
+* Introduce a new warning, `-Wpun-bindings`, which warns the user when a binding binds a name  that would clash with another identifier if Haskell had a single unified namespace.
+* Introduce a new warning, `-Wpuns`, which warns the user of using an identifier that would be referred to another identifier if Haskell had a single unified namespace.
+* The deprecation strategy for the `'` syntax in `-XDataKinds` and `''` syntax in `-XTemplateHaskell` is the following:
+  * In the next release add `-Wpun-bindings`, `-Wpuns`, `-Wprime-data-kinds` and `-Wdouble-prime-template-haskell` to `-Wcompat`.
+  * Three releases from after this proposal is implemented add all four warnings to `-Wall`.
+  * Seven releases from after this proposal is implemented deprecate the syntax and enable `-Wprime-data-kinds` and `-Wdouble-prime-template-haskell` by default.
+  * Fifteen releases from after this proposal is implemented reject the syntax.
+
+### Extended Proposed Change Specification
+
+#### Unify Namespace Qualifiers
+
+* Change `pattern` syntax in `-XPatternSynonyms` to use `data` keyword instead. Introduce `-Wpattern-import` warning that warns when `pattern` syntax is used. Add it to `-Wcompat`.
+* If this proposal is accepted before the [fixities proposal](https://github.com/ghc-proposals/ghc-proposals/blob/master/proposals/0008-type-infix.rst) is implemented, amend that proposal to use `data` instead of `value`.
+
+#### Add `~` operator
+
+* Remove `a ~ b` as a special syntax and introduce a `a ~ b` type operator and add it to `Data.BuiltInTypes`
+
 ## Examples
 
 Here are some examples of the new syntax:
@@ -139,22 +158,99 @@ f :: T
 f = D.Proxy
 ```
 
-Warning examples:
+In the examples on how warnings work, we will consider a currently working scenario and view it as if Haskell had a single unified namespace.
+
+`-Wpuns` example #1:
+```haskell
+module A where { data A = T }
+module B where { data T = X }
+
+module C where
+
+import A
+import B
+
+f = T
+```
+
+If Haskell had a single unified namespace referring to `T` would result in ambiguity (is it `A.T` or `B.T`?), thus this should trigger the warning.
+
+`-Wpuns` example #2:
+```haskell
+a = 15
+f :: a -> a
+```
+If Haskell had a single unified namespace, `a` instead of referring to implicitly bound type-variable `a` would refer to `a` on the type-level. This means that punning is used and should trigger the warning.
+
+On the contrary:
+```haskell
+a = 15
+
+f :: forall a. a -> a
+```
+Does not use punning because if Haskell had a single unified namespace, explicitly bound type variable `a` would shadow the top-level `a`.
+
+`-Wpuns` example #3:
+```haskell
+{-# LANGUAGE ScopedTypeVariabels #-}
+a = 15
+
+f :: forall a. a -> a
+f = \a -> (a :: a)
+--              ^ warning here
+```
+In all of the `a` uses except for the last one there is no punning, because if Haskell had a single unified namespace, in the type signature, top-level `a` would be shadowed by explicitly bound type variable `a`, and in the expression `a` variable bound in the lambda would shadow the type variable. In the very last case, however, currently the `a` would refer to the type variable, but if Haskell had a single namespace it would refer to the data variable. Thus the warning is triggered.
+
+`-Wpun-bindings` example #1:
+```haskell
+id :: t -> t
+id @a a = a
+```
+Here, when term level `a` is bound it would conflict with the type level `a` if Haskell had a single namespace, thus triggering the warning. This behavior is similar to conflicting definition error for `f b b = ...`
 
 ```haskell
-data T
+Test.hs:1:3: error:
+    • Conflicting definitions for 'b'
+      Bound at: Test.hs:1:3
+                Test.hs:1:5
+    • In an equation for 'f'
+```
 
-data A = T -- triggers -Wpun-declaration
+On the contrary, the code below is fine, similarly to `-Wpuns` example #2, the `a` is shadowed instead.
+```haskell
+f :: t -> ()
+f @a = \a -> ()
+```
 
-f = T -- triggers -Wpuns because T exists both in the type and the data namespaces
+`-Wpun-bindings` example #2:
+```haskell
+data T = T
+```
+If Haskell had a single unified namespace, type constructor `T` and data constructor `T` would conflict, thus this should trigger the warning.
+
+`-Wpun-bindings`, example #3
+```haskell
+data T = MkT
+data B = T | F
+```
+Even though type constructor `T` and data constructor `T` are defined in different definitions, they would still cause a conflict, same as example #2.
+
+`-Wpun-bindings`, example #4
+```haskell
+data J = Bool
+```
+This should not cause the warning, because `Bool` defined here would not conflict with `Bool` imported from `Prelude`, it would shadow it instead:
+```haskell
+import Prelude (Bool)
+data Bool -- no conflict
 ```
 
 ## Effect and Interactions
 
-* There is an asymmetry with what `-XDataKinds` does, as `-XDataKinds` only promotes data constructors to the type level and doesn't promote variables. On the contrary, new lookup rules let users reference type variables at the term-level. 
+* There is an asymmetry with what `-XDataKinds` does, as `-XDataKinds` only promotes data constructors to the type level and doesn't promote variables. On the contrary, new lookup rules let users reference type variables at the term-level.
   ```haskell
   f :: forall a. a -> Int
-  f _ = sizeOf a -- valid code
+  f _ = sizeOf a -- passes the renamer
   ```
   Compare this to `-XDataKinds`:
   ```haskell
@@ -162,14 +258,23 @@ f = T -- triggers -Wpuns because T exists both in the type and the data namespac
   a = 5
   f :: Proxy a -> Proxy a -- 'a' here does not refer to the term-level 'a' and is implicitly quantified 
   ```
+  In this example `a` in `f`'s type signature does not refer to the `a` defined above and instead (implicitly) becomes a type variable:
+  ```haskell
+  f :: forall a. Proxy a -> Proxy a
+  ```
+ * This code will now pass the renamer, but will still be rejected by the type checker:
+   ```haskell
+   data T = MkT
+   f = T
+   ```
 
 ## Costs and Drawbacks
 
 * This proposal introduces new, potentially confusing for newcomers syntax, however, the newcomers can just look up the syntax.
-* It becomes impossible to refer to a punned name on type level:
+* After `'` syntax in `-XDataKinds` is deprecated it becomes impossible to refer to a punned name on type level:
   ```haskell
   data T = T
-  
+
   f :: T -- Will always refer to the type constructor
   f = T -- Will always refer to the data constructor
   ```
@@ -177,7 +282,7 @@ f = T -- triggers -Wpuns because T exists both in the type and the data namespac
   ```haskell
   import Data.Proxy type as T
   import Data.Proxy data as D
-  
+
   f = T.Proxy -- Refers to the type constructor
   h :: D.Proxy -- Refers to the data constructor
   ```
@@ -196,4 +301,4 @@ None
 
 I (Artyom Kuznetsov) will implement the change.
 
-There's a work in progress prototype that can be found [here](https://gitlab.haskell.org/hithroc/ghc/tree/wip/unified-namespaces)
+There's a merge request with `-Wpuns` warning implementation which can be found here [here](https://gitlab.haskell.org/ghc/ghc/merge_requests/2044).
