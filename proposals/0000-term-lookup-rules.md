@@ -137,12 +137,13 @@ These problems could be solved by changing the identifier lookup rules in a non-
 
 #### Unify Namespace Qualifiers
 
-* Change `pattern` syntax in `-XPatternSynonyms` to use `data` keyword instead. Introduce `-Wpattern-import` warning that warns when `pattern` syntax is used. Add it to `-Wcompat`.
+* Change `pattern` syntax in `-XPatternSynonyms` to use `data` keyword instead for import and export lists. Introduce `-Wpattern-import` warning that warns when `pattern` syntax is used. Add it to `-Wcompat`.
 * If this proposal is accepted before the [fixities proposal](https://github.com/ghc-proposals/ghc-proposals/blob/master/proposals/0008-type-infix.rst) is implemented, amend that proposal to use `data` instead of `value`.
+* `data` keyword is just an example and the specific keyword name is left under committee discretion.
 
 #### Add `~` operator
 
-* Remove `a ~ b` as a special syntax and introduce a `a ~ b` type operator and add it to `Data.BuiltInTypes`
+* Remove `a ~ b` as a special syntax and introduce a `a ~ b` type operator and add it to `Data.BuiltInTypes` and remove it from being always in scope (like `[]` and `()`)
 
 ## Examples
 
@@ -201,6 +202,31 @@ f = \a -> (a :: a)
 ```
 In all of the `a` uses except for the last one there is no punning, because if Haskell had a single unified namespace, in the type signature, top-level `a` would be shadowed by explicitly bound type variable `a`, and in the expression `a` variable bound in the lambda would shadow the type variable. In the very last case, however, currently the `a` would refer to the type variable, but if Haskell had a single namespace it would refer to the data variable. Thus the warning is triggered.
 
+`-Wpuns` example #4:
+```haskell
+f :: [] a -- warning
+g :: [a]  -- warning
+g = []    -- warning
+h = [a]   -- warning
+x = [a,b] -- no warning
+```
+
+All of the cases except the very last one will emit `-Wpuns` warning because in all of them it is not clear whether the data constructor or a type constructor is being referred to, except in the very last case.
+
+`-Wpuns` example #5:
+```haskell
+f :: ()      -- warning
+f = ()       -- warning
+g :: (a,b)   -- warning
+g = (c,d)    -- warning
+h :: (,) a b -- warning
+h = (,) c d  -- warning
+```
+
+Tuples in this case a very much the same as lists except they will emit a warning in all cases.
+
+Note that for both lists and tuples if `-XNoBuiltInTypes` is a enabled, the type constructors will not be in scope anymore and no warnings will be emited.
+
 `-Wpun-bindings` example #1:
 ```haskell
 id :: t -> t
@@ -247,6 +273,8 @@ data Bool -- no conflict
 
 ## Effect and Interactions
 
+* This proposal does not interact with built-in behavior of `(->)` which remains special.
+
 * There is an asymmetry with what `-XDataKinds` does, as `-XDataKinds` only promotes data constructors to the type level and doesn't promote variables. On the contrary, new lookup rules let users reference type variables at the term-level.
   ```haskell
   f :: forall a. a -> Int
@@ -256,7 +284,7 @@ data Bool -- no conflict
   ```haskell
   {-# LANGUAGE DataKinds #-}
   a = 5
-  f :: Proxy a -> Proxy a -- 'a' here does not refer to the term-level 'a' and is implicitly quantified 
+  f :: Proxy a -> Proxy a -- 'a' here does not refer to the term-level 'a' and is implicitly quantified
   ```
   In this example `a` in `f`'s type signature does not refer to the `a` defined above and instead (implicitly) becomes a type variable:
   ```haskell
@@ -301,4 +329,4 @@ None
 
 I (Artyom Kuznetsov) will implement the change.
 
-There's a merge request with `-Wpuns` warning implementation which can be found here [here](https://gitlab.haskell.org/ghc/ghc/merge_requests/2044).
+There's a merge request with `-Wpuns` warning implementation which can be found [here](https://gitlab.haskell.org/ghc/ghc/merge_requests/2044).
