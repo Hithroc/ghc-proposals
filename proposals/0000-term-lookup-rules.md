@@ -350,7 +350,7 @@ f :: T
 f = D.Proxy
 ```
 
-### Punnning Warnings
+### Punning Warnings
 
 Recall that `-Wpun-bindings` is triggered at definition sites that use punning,
 and `-Wpuns` is triggered at use sites. To see what qualifies as punning, we
